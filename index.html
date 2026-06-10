@@ -266,9 +266,10 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;background:r
       <option value="3">3道</option><option value="5">5道</option><option value="8">8道</option>
     </select>
     <div class="lab">CLAUDE 后端地址</div>
-    <input id="ai-url" placeholder="如 http://你的服务器:7777（只需填一次）">
+    <input id="ai-url" placeholder="如 https://dan.echowjoy.uk/fridge（只需填一次）" oninput="cfgChanged()">
     <div class="lab">访问口令</div>
-    <input id="ai-token" placeholder="服务端设置的 FRIDGE_TOKEN" type="password">
+    <input id="ai-token" placeholder="服务端设置的 FRIDGE_TOKEN" type="password" oninput="cfgChanged()">
+    <div id="ai-conn" style="font-size:11px;margin-top:4px"></div>
     <div id="ai-out"></div>
     <div class="mbtn">
       <button class="btn bo" onclick="closeM('m3')">关闭</button>
@@ -570,11 +571,31 @@ function syncPull(){
     }).catch(function(){syncReady=true;syncPush()});
 }
 
+// 地址/口令一输入就自动保存，并测试连接
+var connTimer=null;
+function cfgChanged(){
+  if(connTimer)clearTimeout(connTimer);
+  connTimer=setTimeout(function(){
+    var cfg=saveBackendCfg();
+    var el=document.getElementById('ai-conn');
+    if(!cfg.url){el.innerHTML='';return}
+    el.innerHTML='<span style="color:var(--sub)">连接中...</span>';
+    fetch(cfg.url+'/api/data',{headers:{'Authorization':'Bearer '+cfg.token}}).then(function(r){
+      if(r.status===401){el.innerHTML='<span style="color:#ff3333">✗ 口令不对</span>';return}
+      if(!r.ok){el.innerHTML='<span style="color:#ff3333">✗ 后端响应异常 HTTP '+r.status+'</span>';return}
+      el.innerHTML='<span style="color:var(--cyan)">✓ 已连接，自动保存 + 同步已开启</span>';
+    }).catch(function(e){
+      el.innerHTML='<span style="color:#ff3333">✗ 连不上：'+e.message+'</span>';
+    });
+  },600);
+}
+
 // ===== AI =====
 function openAI(){
   document.getElementById('m3').classList.add('show');
   document.getElementById('ai-url').value=localStorage.getItem('f_burl')||'';
   document.getElementById('ai-token').value=localStorage.getItem('f_btok')||'';
+  if(localStorage.getItem('f_burl'))cfgChanged();
   var el=document.getElementById('ai-stock');
 if(!stock.length){el.innerHTML='<span style="color:var(--sub)">冰箱是空的，先去添加食材吧</span>';
 }else{
@@ -590,9 +611,9 @@ function toggleAiStock(val){
   document.querySelectorAll('#ai-stock input[type=checkbox]').forEach(function(cb){cb.checked=val});
 }
 function callAI(){
-  if(!stock.length){alert('冰箱里没有食材');return}
   var cfg=saveBackendCfg();
   if(!cfg.url){alert('请先填写 Claude 后端地址');return}
+  if(!stock.length){alert('冰箱里没有食材');return}
   var num=document.getElementById('ai-num').value;
   var selected=[];
 document.querySelectorAll('#ai-stock input[type=checkbox]').forEach(function(cb){
