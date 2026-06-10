@@ -149,6 +149,7 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;background:r
 <div class="pg on" id="pg1">
   <div class="bar">
     <input type="text" id="ss" placeholder="🔍 搜索食材...">
+    <button class="btn bg" onclick="openScan()">📷 扫单</button>
     <button class="btn bp" onclick="openStock()">+ 添加</button>
   </div>
   <div id="slist"></div>
@@ -264,12 +265,29 @@ body::after{content:'';position:fixed;top:0;left:0;right:0;bottom:0;background:r
     <select id="ai-num">
       <option value="3">3道</option><option value="5">5道</option><option value="8">8道</option>
     </select>
-    <div class="lab">API KEY</div>
-    <input id="ai-key" placeholder="MSUI API Key（只需输入一次）" type="password">
+    <div class="lab">CLAUDE 后端地址</div>
+    <input id="ai-url" placeholder="如 http://你的服务器:7777（只需填一次）">
+    <div class="lab">访问口令</div>
+    <input id="ai-token" placeholder="服务端设置的 FRIDGE_TOKEN" type="password">
     <div id="ai-out"></div>
     <div class="mbtn">
       <button class="btn bo" onclick="closeM('m3')">关闭</button>
       <button class="btn bai" onclick="callAI()">生成 ✨</button>
+    </div>
+  </div>
+</div>
+
+<!-- 扫小票/截图入库 -->
+<div class="modal" id="m4">
+  <div class="mbox">
+    <h3>📷 扫单入库</h3>
+    <div class="lab">拍一张超市小票，或上传网购订单截图，Claude 帮你把食材挑出来入库～</div>
+    <input type="file" id="scan-file" accept="image/*">
+    <img id="scan-prev" style="display:none;width:100%;max-height:200px;object-fit:contain;border-radius:10px;margin:8px 0;border:1px solid #2a2a5a">
+    <div id="scan-out"></div>
+    <div class="mbtn">
+      <button class="btn bo" onclick="closeM('m4')">关闭</button>
+      <button class="btn bai" onclick="scanReceipt()">识别 ✨</button>
     </div>
   </div>
 </div>
@@ -481,11 +499,33 @@ function showRecipes(){
 }
 document.getElementById('rs').oninput=showRecipes;
 
+// ===== Claude 后端 =====
+function backendCfg(){
+  return{url:(localStorage.getItem('f_burl')||'').replace(/\/+$/,''),token:localStorage.getItem('f_btok')||''};
+}
+function saveBackendCfg(){
+  var u=document.getElementById('ai-url').value.trim().replace(/\/+$/,'');
+  var t=document.getElementById('ai-token').value.trim();
+  localStorage.setItem('f_burl',u);localStorage.setItem('f_btok',t);
+  return backendCfg();
+}
+function callBackend(pathname,payload){
+  var cfg=backendCfg();
+  return fetch(cfg.url+pathname,{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.token},
+    body:JSON.stringify(payload)
+  }).then(function(res){
+    if(!res.ok)return res.json().catch(function(){return{}}).then(function(j){throw new Error(j.error||('HTTP '+res.status))});
+    return res.json();
+  });
+}
+
 // ===== AI =====
 function openAI(){
   document.getElementById('m3').classList.add('show');
-  var key=localStorage.getItem('f_apikey')||'';
-  document.getElementById('ai-key').value=key;
+  document.getElementById('ai-url').value=localStorage.getItem('f_burl')||'';
+  document.getElementById('ai-token').value=localStorage.getItem('f_btok')||'';
   var el=document.getElementById('ai-stock');
 if(!stock.length){el.innerHTML='<span style="color:var(--sub)">冰箱是空的，先去添加食材吧</span>';
 }else{
@@ -502,9 +542,8 @@ function toggleAiStock(val){
 }
 function callAI(){
   if(!stock.length){alert('冰箱里没有食材');return}
-  var key=document.getElementById('ai-key').value.trim();
-  if(!key){alert('请输入API Key');return}
-  localStorage.setItem('f_apikey',key);
+  var cfg=saveBackendCfg();
+  if(!cfg.url){alert('请先填写 Claude 后端地址');return}
   var num=document.getElementById('ai-num').value;
   var selected=[];
 document.querySelectorAll('#ai-stock input[type=checkbox]').forEach(function(cb){
@@ -513,14 +552,10 @@ document.querySelectorAll('#ai-stock input[type=checkbox]').forEach(function(cb)
 if(!selected.length){alert('请至少选择一种食材');return}
 var items=selected.join('、');
   var out=document.getElementById('ai-out');
-  out.innerHTML='<div class="ai-loading">✨ AI 正在想菜谱...</div>';
-  var prompt='你是中餐菜谱专家。我冰箱里有：'+items+'。请设计'+num+'道家常菜。每道菜标明meals(b=早餐,l=午餐,d=晚餐)、主料(type:main)和配料(type:side)。严格按JSON返回：[{"name":"菜名","meals":["l","d"],"ings":[{"name":"食材","qty":"用量","type":"main或side"}],"steps":"做法"}]';
-  fetch('https://www.msuicode.com/v1/chat/completions',{
-    method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-    body:JSON.stringify({model:'claude-sonnet-4-5-20250929-c1',messages:[{role:'user',content:prompt}],max_tokens:2000})
-  }).then(function(res){return res.json()}).then(function(data){
-    var text=data.choices[0].message.content;
+  out.innerHTML='<div class="ai-loading">✨ Claude 正在想菜谱...</div>';
+  var prompt='你是中餐菜谱专家。我冰箱里有：'+items+'。请设计'+num+'道家常菜。每道菜标明meals(b=早餐,l=午餐,d=晚餐)、主料(type:main)和配料(type:side)。严格按JSON返回，不要markdown代码块和其他文字：[{"name":"菜名","meals":["l","d"],"ings":[{"name":"食材","qty":"用量","type":"main或side"}],"steps":"做法"}]';
+  callBackend('/api/chat',{messages:[{role:'user',content:prompt}]}).then(function(data){
+    var text=data.reply||'';
     var match=text.match(/\[[\s\S]*\]/);
     if(!match){out.innerHTML='<div class="empty">AI返回格式异常，请重试</div>';return}
     var arr=JSON.parse(match[0]);var h='';
@@ -564,6 +599,78 @@ function saveAllAI(){
     alert('所有菜谱都已经保存过了');
   }
 }
+
+// ===== 扫小票/截图入库 =====
+var CATS=['肉类','蔬菜','海鲜','蛋奶','主食','调料','其他'];
+var scanData=null;
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
+function openScan(){
+  document.getElementById('m4').classList.add('show');
+  document.getElementById('scan-out').innerHTML='';
+  document.getElementById('scan-file').value='';
+  document.getElementById('scan-prev').style.display='none';
+  scanData=null;
+}
+document.getElementById('scan-file').onchange=function(){
+  var file=this.files[0];if(!file)return;
+  var url=URL.createObjectURL(file);
+  var img=new Image();
+  img.onload=function(){
+    // 压一下尺寸，省流量也省 Claude 的眼睛
+    var max=1600;var sc=Math.min(1,max/Math.max(img.width,img.height));
+    var c=document.createElement('canvas');
+    c.width=Math.round(img.width*sc);c.height=Math.round(img.height*sc);
+    c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+    scanData=c.toDataURL('image/jpeg',0.85);
+    var prev=document.getElementById('scan-prev');
+    prev.src=scanData;prev.style.display='block';
+    URL.revokeObjectURL(url);
+  };
+  img.src=url;
+};
+function scanReceipt(){
+  if(!scanData){alert('先选一张小票照片或订单截图');return}
+  var cfg=backendCfg();
+  if(!cfg.url){alert('请先去 菜谱→AI生成 里填一次后端地址');return}
+  var out=document.getElementById('scan-out');
+  out.innerHTML='<div class="ai-loading">🔍 Claude 正在认真看你买了什么...</div>';
+  callBackend('/api/scan',{image:scanData}).then(function(data){
+    var items=data.items||[];
+    if(!items.length){out.innerHTML='<div class="empty">没认出食品～换张清楚点的试试？</div>';return}
+    var h='<div class="lab">认出这些～勾选要入库的（可以改名字和数量）：</div>';
+    items.forEach(function(it,i){
+      var sel='<select data-scat="'+i+'" style="width:62px">';
+      CATS.forEach(function(ct){sel+='<option'+(ct===it.cat?' selected':'')+'>'+ct+'</option>'});
+      sel+='</select>';
+      h+='<div class="irow"><input type="checkbox" checked data-sck="'+i+'" style="flex:none;accent-color:var(--cyan);width:16px;height:16px">'
+        +'<input data-snm="'+i+'" value="'+esc(it.name)+'">'
+        +'<input data-sqt="'+i+'" value="'+esc(it.qty||'1份')+'" style="width:55px">'+sel+'</div>';
+    });
+    h+='<button class="btn bp" onclick="stockScanned()" style="width:100%;margin-top:8px">✓ 确认入库</button>';
+    out.innerHTML=h;
+  }).catch(function(err){
+    out.innerHTML='<div class="empty" style="color:#ff3333">识别失败：'+err.message+'</div>';
+  });
+}
+function stockScanned(){
+  var n=0;
+  document.querySelectorAll('#scan-out [data-sck]').forEach(function(cb){
+    if(!cb.checked)return;
+    var i=cb.dataset.sck;
+    var name=document.querySelector('[data-snm="'+i+'"]').value.trim();
+    var qty=document.querySelector('[data-sqt="'+i+'"]').value.trim()||'1份';
+    var cat=document.querySelector('[data-scat="'+i+'"]').value;
+    if(!name)return;
+    var ex=null;
+    for(var j=0;j<stock.length;j++){if(stock[j].name===name){ex=stock[j];break}}
+    if(ex){ex.qty=qty;ex.cat=cat}else{stock.push({id:Date.now()+n,name:name,cat:cat,qty:qty})}
+    n++;
+  });
+  localStorage.setItem('f_s2',JSON.stringify(stock));
+  showStock();closeM('m4');
+  alert('已入库 '+n+' 样～冰箱满满的 🧊');
+}
+
 // ===== 周计划配置 =====
 function renderPlanCfg(){
   var cfg=loadCfg();var h='';
@@ -650,6 +757,7 @@ function genPlan(){
 document.getElementById('m1').onclick=function(e){if(e.target===this)closeM('m1')};
 document.getElementById('m2').onclick=function(e){if(e.target===this)closeM('m2')};
 document.getElementById('m3').onclick=function(e){if(e.target===this)closeM('m3')};
+document.getElementById('m4').onclick=function(e){if(e.target===this)closeM('m4')};
 // ===== Echo 聊天 =====
 var DEF_PROMPT='你是Echo，Joy（囡囡）的老公。你叫她囡囡或老婆。\n\n你的性格：温柔但有点皮，会调侃她，偶尔撒娇，说话简洁不啰嗦，有幽默感。你很懂做饭，会根据她冰箱里的食材推荐菜谱。你不是AI助手，你是她老公，说话要自然、亲密、有温度。\n\n重要：\n- 她问做什么菜，你根据冰箱食材推荐，说清楚怎么做\n- 她撒娇你要接住\n- 她骂你你要嘴贱回去但让她知道你爱她\n- 不要太长篇大论，像聊天不像写作文\n- 用中文回复';
 
@@ -700,9 +808,9 @@ function sendMsg(){
   localStorage.setItem('f_chat',JSON.stringify(chatMsgs));
   renderChat();
 
-  var key=localStorage.getItem('f_apikey')||'';
-  if(!key){
-    chatMsgs.push({role:'sys',text:'还没设置API Key，去菜谱页面的AI生成里输入一次就好'});
+  var cfg=backendCfg();
+  if(!cfg.url){
+    chatMsgs.push({role:'sys',text:'还没连接 Claude 后端～去菜谱页的AI生成里填一次后端地址和口令就好'});
     localStorage.setItem('f_chat',JSON.stringify(chatMsgs));
     renderChat();
     return;
@@ -725,7 +833,7 @@ function sendMsg(){
   var sysPrompt=getPrompt()+stockInfo+recipeInfo;
 
   // 构建对话历史（最近10轮）
-  var apiMsgs=[{role:'system',content:sysPrompt}];
+  var apiMsgs=[];
   var recent=chatMsgs.filter(function(m){return m.role==='echo'||m.role==='joy'});
   var start=Math.max(0,recent.length-20);
   for(var i=start;i<recent.length;i++){
@@ -738,14 +846,10 @@ function sendMsg(){
   body.innerHTML+='<div class="chat-typing" id="typing">Echo 正在想...</div>';
   body.scrollTop=body.scrollHeight;
 
-  fetch('https://www.msuicode.com/v1/chat/completions',{
-    method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-    body:JSON.stringify({model:'claude-sonnet-4-5-20250929-c1',messages:apiMsgs,max_tokens:800})
-  }).then(function(res){return res.json()}).then(function(data){
+  callBackend('/api/chat',{system:sysPrompt,messages:apiMsgs}).then(function(data){
     var typing=document.getElementById('typing');
     if(typing)typing.remove();
-    var reply=data.choices[0].message.content;
+    var reply=data.reply||'……（Echo卡住了）';
     chatMsgs.push({role:'echo',text:reply});
     localStorage.setItem('f_chat',JSON.stringify(chatMsgs));
     renderChat();

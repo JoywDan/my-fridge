@@ -1,0 +1,15 @@
+{
+  "name": "囡囡的冰箱",
+  "short_name": "囡囡的冰箱",
+  "display": "standalone",
+  "start_url": ".",
+  "background_color": "#0a0a1a",
+  "theme_color": "#0a0a1a",
+  "icons": [
+    {
+      "src": "icon.png.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg"
+    }
+  ]
+}
