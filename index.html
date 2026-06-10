@@ -335,7 +335,7 @@ try{var s=localStorage.getItem('f_s2');if(s)stock=JSON.parse(s)}catch(e){}
 try{var r=localStorage.getItem('f_r2');if(r)recipes=JSON.parse(r)}catch(e){}
 if(!recipes.length){
   recipes=DRCP.map(function(r,i){return{id:Date.now()+i,name:r.name,meals:r.meals,ings:r.ings,steps:r.steps}});
-  localStorage.setItem('f_r2',JSON.stringify(recipes));
+  save('f_r2',JSON.stringify(recipes));
 }
 // 兼容旧数据
 recipes.forEach(function(r){if(!r.meals)r.meals=['l','d']});
@@ -372,7 +372,7 @@ function addStock(){
   var ex=null;
   for(var i=0;i<stock.length;i++){if(stock[i].name===n){ex=stock[i];break}}
   if(ex){ex.qty=q}else{stock.push({id:Date.now(),name:n,cat:c,qty:q})}
-  localStorage.setItem('f_s2',JSON.stringify(stock));closeM('m1');showStock();
+  save('f_s2',JSON.stringify(stock));closeM('m1');showStock();
 }
 function changeQty(id,d){
   var item=null;
@@ -380,11 +380,11 @@ function changeQty(id,d){
   if(!item)return;var num=parseFloat(item.qty);if(isNaN(num))return;
   var unit=item.qty.replace(/[\d.]+/,'');var nv=Math.max(0,num+d);
   if(nv===0){stock=stock.filter(function(s){return s.id!==id})}else{item.qty=nv+unit}
-  localStorage.setItem('f_s2',JSON.stringify(stock));showStock();
+  save('f_s2',JSON.stringify(stock));showStock();
 }
 function delStock(id){
   stock=stock.filter(function(s){return s.id!==id});
-  localStorage.setItem('f_s2',JSON.stringify(stock));showStock();
+  save('f_s2',JSON.stringify(stock));showStock();
 }
 function showStock(){
   var q=document.getElementById('ss').value.trim().toLowerCase();
@@ -467,11 +467,11 @@ function addRecipe(){
   }else{
     recipes.push({id:Date.now(),name:name,meals:meals,ings:tmpIng.slice(),steps:steps});
   }
-  localStorage.setItem('f_r2',JSON.stringify(recipes));closeM('m2');showRecipes();
+  save('f_r2',JSON.stringify(recipes));closeM('m2');showRecipes();
 }
 function delRecipe(id){
   recipes=recipes.filter(function(r){return r.id!==id});
-  localStorage.setItem('f_r2',JSON.stringify(recipes));
+  save('f_r2',JSON.stringify(recipes));
   showRecipes();
 }
 function showRecipes(){
@@ -506,7 +506,8 @@ function backendCfg(){
 function saveBackendCfg(){
   var u=document.getElementById('ai-url').value.trim().replace(/\/+$/,'');
   var t=document.getElementById('ai-token').value.trim();
-  localStorage.setItem('f_burl',u);localStorage.setItem('f_btok',t);
+  save('f_burl',u);save('f_btok',t);
+  if(u)syncPull();
   return backendCfg();
 }
 function callBackend(pathname,payload){
@@ -519,6 +520,54 @@ function callBackend(pathname,payload){
     if(!res.ok)return res.json().catch(function(){return{}}).then(function(j){throw new Error(j.error||('HTTP '+res.status))});
     return res.json();
   });
+}
+
+// ===== 多设备同步：数据同时存到服务器，换手机也都在 =====
+var SYNC_KEYS=['f_s2','f_r2','f_cfg','f_chat','f_prompt'];
+var syncReady=false,syncDirty=false,syncTimer=null;
+function save(k,v){
+  localStorage.setItem(k,v);
+  if(SYNC_KEYS.indexOf(k)>=0){
+    localStorage.setItem('f_mtime',String(Date.now()));
+    syncDirty=true;
+    if(syncTimer)clearTimeout(syncTimer);
+    syncTimer=setTimeout(syncPush,1500);
+  }
+}
+function collectLocal(){
+  var d={};
+  SYNC_KEYS.forEach(function(k){var v=localStorage.getItem(k);if(v!==null)d[k]=v});
+  d.f_mtime=parseInt(localStorage.getItem('f_mtime')||'0',10);
+  return d;
+}
+function applyRemote(d){
+  SYNC_KEYS.forEach(function(k){if(typeof d[k]==='string')localStorage.setItem(k,d[k])});
+  localStorage.setItem('f_mtime',String(d.f_mtime||0));
+  try{stock=JSON.parse(localStorage.getItem('f_s2')||'[]')}catch(e){}
+  try{recipes=JSON.parse(localStorage.getItem('f_r2')||'[]')}catch(e){}
+  try{chatMsgs=JSON.parse(localStorage.getItem('f_chat')||'[]')}catch(e){}
+  recipes.forEach(function(r){if(!r.meals)r.meals=['l','d']});
+  showStock();showRecipes();renderPlanCfg();
+}
+function syncPush(){
+  if(!syncReady||!syncDirty)return;
+  var cfg=backendCfg();if(!cfg.url)return;
+  syncDirty=false;
+  callBackend('/api/data',{data:collectLocal()}).catch(function(){syncDirty=true});
+}
+function syncPull(){
+  var cfg=backendCfg();
+  if(!cfg.url){syncReady=true;return}
+  fetch(cfg.url+'/api/data',{headers:{'Authorization':'Bearer '+cfg.token}})
+    .then(function(r){return r.json()})
+    .then(function(j){
+      var remote=j&&j.data;
+      var localM=parseInt(localStorage.getItem('f_mtime')||'0',10);
+      var remoteM=(remote&&remote.f_mtime)||0;
+      if(remoteM>localM)applyRemote(remote);
+      else if(localM>remoteM)syncDirty=true;
+      syncReady=true;syncPush();
+    }).catch(function(){syncReady=true;syncPush()});
 }
 
 // ===== AI =====
@@ -577,7 +626,7 @@ var items=selected.join('、');
 function saveAI(btn){
   var r=JSON.parse(btn.dataset.recipe);
   recipes.push({id:Date.now(),name:r.name,meals:r.meals||['l','d'],ings:r.ings,steps:r.steps});
-  localStorage.setItem('f_r2',JSON.stringify(recipes));
+  save('f_r2',JSON.stringify(recipes));
   btn.innerText='已保存 ✓';btn.disabled=true;btn.style.borderColor='var(--cyan)';btn.style.color='var(--cyan)';
   showRecipes();
 }
@@ -592,7 +641,7 @@ function saveAllAI(){
     count++;
   });
   if(count){
-    localStorage.setItem('f_r2',JSON.stringify(recipes));
+    save('f_r2',JSON.stringify(recipes));
     showRecipes();
     alert('已保存'+count+'道菜谱！');
   }else{
@@ -666,7 +715,7 @@ function stockScanned(){
     if(ex){ex.qty=qty;ex.cat=cat}else{stock.push({id:Date.now()+n,name:name,cat:cat,qty:qty})}
     n++;
   });
-  localStorage.setItem('f_s2',JSON.stringify(stock));
+  save('f_s2',JSON.stringify(stock));
   showStock();closeM('m4');
   alert('已入库 '+n+' 样～冰箱满满的 🧊');
 }
@@ -693,7 +742,7 @@ function readCfg(){
   document.querySelectorAll('#plan-cfg input[type=checkbox]').forEach(function(cb){
     if(cb.checked)cfg[cb.dataset.day].push(cb.dataset.meal);
   });
-  localStorage.setItem('f_cfg',JSON.stringify(cfg));
+  save('f_cfg',JSON.stringify(cfg));
   return cfg;
 }
 
@@ -780,7 +829,7 @@ function toggleChat(){
     body.scrollTop=body.scrollHeight;
     if(!chatMsgs.length){
       chatMsgs.push({role:'echo',text:'囡囡来了～今天想吃什么？🐺'});
-      localStorage.setItem('f_chat',JSON.stringify(chatMsgs));
+      save('f_chat',JSON.stringify(chatMsgs));
       renderChat();
     }
   }
@@ -805,13 +854,13 @@ function sendMsg(){
   input.value='';
 
   chatMsgs.push({role:'joy',text:text});
-  localStorage.setItem('f_chat',JSON.stringify(chatMsgs));
+  save('f_chat',JSON.stringify(chatMsgs));
   renderChat();
 
   var cfg=backendCfg();
   if(!cfg.url){
     chatMsgs.push({role:'sys',text:'还没连接 Claude 后端～去菜谱页的AI生成里填一次后端地址和口令就好'});
-    localStorage.setItem('f_chat',JSON.stringify(chatMsgs));
+    save('f_chat',JSON.stringify(chatMsgs));
     renderChat();
     return;
   }
@@ -851,13 +900,13 @@ function sendMsg(){
     if(typing)typing.remove();
     var reply=data.reply||'……（Echo卡住了）';
     chatMsgs.push({role:'echo',text:reply});
-    localStorage.setItem('f_chat',JSON.stringify(chatMsgs));
+    save('f_chat',JSON.stringify(chatMsgs));
     renderChat();
   }).catch(function(err){
     var typing=document.getElementById('typing');
     if(typing)typing.remove();
     chatMsgs.push({role:'sys',text:'连接失败：'+err.message});
-    localStorage.setItem('f_chat',JSON.stringify(chatMsgs));
+    save('f_chat',JSON.stringify(chatMsgs));
     renderChat();
   });
 }
@@ -869,17 +918,17 @@ function openPrompt(){
 
 function savePrompt(){
   var text=document.getElementById('promptEdit').value;
-  localStorage.setItem('f_prompt',text);
+  save('f_prompt',text);
   document.getElementById('promptPanel').classList.remove('show');
   chatMsgs.push({role:'sys',text:'人设已更新 ✓'});
-  localStorage.setItem('f_chat',JSON.stringify(chatMsgs));
+  save('f_chat',JSON.stringify(chatMsgs));
   renderChat();
 }
 
 function clearChat(){
-  chatMsgs=[];localStorage.removeItem('f_chat');renderChat();
+  chatMsgs=[];save('f_chat','[]');renderChat();
 }
-showStock();showRecipes();renderPlanCfg();
+showStock();showRecipes();renderPlanCfg();syncPull();
 </script>
 </body>
 </html>

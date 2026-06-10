@@ -28,6 +28,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const PORT = parseInt(process.env.PORT || '7777', 10);
+const HOST = process.env.HOST || '0.0.0.0';
 const TOKEN = process.env.FRIDGE_TOKEN || '';
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const MODEL = process.env.CLAUDE_MODEL || 'sonnet';
@@ -35,6 +36,7 @@ const SCAN_MODEL = process.env.CLAUDE_SCAN_MODEL || MODEL;
 const TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '180000', 10);
 const ROOT = __dirname;
 const UPLOAD_DIR = path.join(ROOT, '.uploads');
+const DATA_FILE = path.join(ROOT, '.data', 'fridge.json');
 
 if (!TOKEN) {
   console.warn('[警告] 没有设置 FRIDGE_TOKEN，任何知道地址的人都能调用你的 Claude！');
@@ -171,6 +173,26 @@ function handleScan(body, res) {
   });
 }
 
+// GET/POST /api/data —— 多设备同步：整包 JSON 存在服务器上，换手机数据也在
+function handleDataGet(res) {
+  fs.readFile(DATA_FILE, function (err, buf) {
+    if (err) return sendJson(res, 200, { data: null });
+    try {
+      sendJson(res, 200, { data: JSON.parse(buf) });
+    } catch (e) {
+      sendJson(res, 200, { data: null });
+    }
+  });
+}
+
+function handleDataPut(body, res) {
+  const d = body.data;
+  if (!d || typeof d !== 'object') return sendJson(res, 400, { error: 'data 不能为空' });
+  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+  fs.writeFileSync(DATA_FILE, JSON.stringify(d));
+  sendJson(res, 200, { ok: true });
+}
+
 // ---------- HTTP 基建 ----------
 
 function setCors(res) {
@@ -221,7 +243,7 @@ function serveStatic(req, res) {
   if (p === '/') p = '/index.html';
   const file = path.normalize(path.join(ROOT, p));
   const base = path.basename(file);
-  if (!file.startsWith(ROOT + path.sep) || base.startsWith('.') || base === 'server.js') {
+  if (!file.startsWith(ROOT + path.sep) || file.indexOf(path.sep + '.') >= 0 || base === 'server.js') {
     res.writeHead(404); res.end('not found'); return;
   }
   fs.readFile(file, function (err, buf) {
@@ -237,6 +259,17 @@ const server = http.createServer(function (req, res) {
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
   const route = req.url.split('?')[0];
+  if (route === '/api/data') {
+    if (!authorized(req)) return sendJson(res, 401, { error: '口令不对哦' });
+    if (req.method === 'GET') return handleDataGet(res);
+    if (req.method === 'POST') {
+      return readBody(req, 5 * 1024 * 1024, function (err, body) {
+        if (err) return sendJson(res, 400, { error: err.message });
+        handleDataPut(body, res);
+      });
+    }
+    return sendJson(res, 405, { error: '只支持 GET/POST' });
+  }
   if (route === '/api/chat' || route === '/api/scan') {
     if (req.method !== 'POST') return sendJson(res, 405, { error: '只支持 POST' });
     if (!authorized(req)) return sendJson(res, 401, { error: '口令不对哦' });
@@ -252,8 +285,8 @@ const server = http.createServer(function (req, res) {
   res.writeHead(404); res.end('not found');
 });
 
-server.listen(PORT, function () {
-  console.log('🧊 囡囡的冰箱后端已启动: http://0.0.0.0:' + PORT);
+server.listen(PORT, HOST, function () {
+  console.log('🧊 囡囡的冰箱后端已启动: http://' + HOST + ':' + PORT);
   console.log('   模型: ' + MODEL + '（识别小票: ' + SCAN_MODEL + '）');
   console.log('   口令: ' + (TOKEN ? '已设置 ✓' : '未设置 ⚠️'));
 });
